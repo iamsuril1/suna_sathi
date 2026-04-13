@@ -1,0 +1,120 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Premium dark theme global styles */
+@layer base {
+  body {
+    @apply bg-[#0B0F1A] text-white font-sans antialiased;
+  }
+
+  * {
+    @apply border-white/10;
+  }
+}
+
+/* Custom scrollbar */
+@layer utilities {
+  /* Webkit browsers (Chrome, Safari, Edge) */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-white/5 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-white/20 rounded-full hover:bg-white/30;
+  }
+
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.2) rgba(255, 255, 255, 0.05);
+  }
+}
+
+/* Smooth transitions */
+@layer components {
+  .transition-base {
+    @apply transition-all duration-300 ease-in-out;
+  }
+
+  .glassmorphism {
+    @apply bg-white/5 backdrop-blur-xl border border-white/10;
+  }
+
+  .btn-primary {
+    @apply px-6 py-3 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 
+           text-white font-semibold shadow-lg shadow-indigo-500/50 
+           hover:shadow-indigo-500/70 transition-all hover:-translate-y-0.5;
+  }
+
+  .btn-secondary {
+    @apply px-6 py-3 rounded-xl bg-white/5 backdrop-blur-xl border border-white/10 
+           text-gray-300 hover:text-white hover:bg-white/10 hover:border-indigo-500/50 
+           transition-all;
+  }
+}
+
+/* Input focus styles */
+@layer utilities {
+  input:focus,
+  textarea:focus,
+  select:focus {
+    outline: none;
+  }
+
+  input[type="range"] {
+    @apply appearance-none bg-transparent cursor-pointer;
+  }
+
+  input[type="range"]::-webkit-slider-track {
+    @apply h-2 bg-white/10 rounded-full;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    @apply appearance-none w-4 h-4 bg-white rounded-full shadow-lg cursor-pointer;
+    margin-top: -4px;
+  }
+
+  input[type="range"]::-moz-range-track {
+    @apply h-2 bg-white/10 rounded-full;
+  }
+
+  input[type="range"]::-moz-range-thumb {
+    @apply w-4 h-4 bg-white border-0 rounded-full shadow-lg cursor-pointer;
+  }
+}
+
+/* Animation utilities */
+@layer utilities {
+  @keyframes shimmer {
+    0% {
+      background-position: -1000px 0;
+    }
+    100% {
+      background-position: 1000px 0;
+    }
+  }
+
+  .animate-shimmer {
+    animation: shimmer 2s infinite linear;
+    background: linear-gradient(
+      to right,
+      transparent 0%,
+      rgba(255, 255, 255, 0.1) 50%,
+      transparent 100%
+    );
+    background-size: 1000px 100%;
+  }
+}
+
+/* Premium gradient text */
+@layer utilities {
+  .gradient-text {
+    @apply bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent;
+  }
+}
