@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
-  Radio, Music2, Users, Send, Volume2,
-  ArrowLeft, Play, Pause, X,
+  Radio, Music2, Users, Send, Volume2, ArrowLeft,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
@@ -15,8 +14,8 @@ const pad2 = (n) => String(Math.floor(Math.max(0, n))).padStart(2, "0");
 const fmt  = (s) => `${pad2(s / 60)}:${pad2(s % 60)}`;
 
 export default function Live() {
-  const navigate = useNavigate();
-  const { user } = useAuth();
+  const navigate   = useNavigate();
+  const { user }   = useAuth();
   const socketRef  = useRef(null);
   const chatEndRef = useRef(null);
 
@@ -34,6 +33,7 @@ export default function Live() {
   const [floatingReactions, setFloatingReactions] = useState([]);
   const [sessionEnded,      setSessionEnded]      = useState(false);
   const [needsInteraction,  setNeedsInteraction]  = useState(false);
+  const [loadError,         setLoadError]         = useState("");
 
   // ── Sync liveAudio state → React ──────────────────────
   useEffect(() => {
@@ -50,7 +50,7 @@ export default function Live() {
 
   useEffect(() => { liveAudio.setLiveVolume(volume); }, [volume]);
 
-  // ── Load session & auto-play from server position ─────
+  // ── Load session and auto-play from exact radio position ─
   useEffect(() => {
     const load = async () => {
       try {
@@ -65,31 +65,33 @@ export default function Live() {
         setCurrentSong(res.data.currentSong);
         setListenerCount(res.data.listeners || 0);
 
-        // Seek to exact server-estimated position and play
-        const seekTo = res.data.estimatedCurrentTime || 0;
+        // positionInSong = exactly where the radio clock says we should be
+        const seekTo = res.data.positionInSong || 0;
+
         try {
           await liveAudio.loadLiveAndPlay(res.data.currentSong, seekTo);
           setNeedsInteraction(false);
         } catch {
-          // Browser blocked autoplay — show tap-to-play banner
+          // Browser blocked autoplay — show a single tap-to-start banner
           setNeedsInteraction(true);
         }
 
         const chatRes = await api.get("/api/live/chat");
         setMessages(chatRes.data || []);
       } catch (err) {
-        console.error("Failed to load live session:", err);
+        console.error("Failed to load session:", err);
+        setLoadError("Failed to connect to the live stream.");
       } finally {
         setLoading(false);
       }
     };
     load();
 
-    // When leaving page, do NOT stop audio — it keeps playing
+    // Leaving the page does NOT stop the audio
     return () => {};
   }, []);
 
-  // ── Socket ─────────────────────────────────────────────
+  // ── Socket events ─────────────────────────────────────
   useEffect(() => {
     if (!session?.isActive) return;
 
@@ -101,55 +103,33 @@ export default function Live() {
 
     socket.on("listener_count", setListenerCount);
 
-    // Server sends exact current position when we join
-    socket.on("sync_on_join", async ({ isPlaying: playing, currentTime: ct, song }) => {
+    // Server sends exact radio position on join
+    socket.on("sync_on_join", async ({ currentTime: ct, song }) => {
       if (song) setCurrentSong(song);
       try {
-        if (playing) {
-          await liveAudio.loadLiveAndPlay(song || currentSong, ct);
-          setNeedsInteraction(false);
-        } else {
-          liveAudio.seekLive(ct);
-          liveAudio.pauseLive();
-        }
+        await liveAudio.loadLiveAndPlay(song || currentSong, ct);
+        setNeedsInteraction(false);
       } catch {
         setNeedsInteraction(true);
       }
     });
 
-    // Admin play/pause broadcast
-    socket.on("sync_playback", async ({ isPlaying: playing, currentTime: ct }) => {
-      try {
-        if (playing) {
-          liveAudio.seekLive(ct);
-          await liveAudio.resumeLive();
-          setNeedsInteraction(false);
-        } else {
-          liveAudio.seekLive(ct);
-          liveAudio.pauseLive();
-        }
-      } catch {
-        setNeedsInteraction(true);
-      }
-    });
-
-    // Admin changed to a different song — jump to start of new song
-    socket.on("song_changed", async ({ song, currentTime: ct, isPlaying: playing }) => {
+    // Radio clock advanced to next song
+    socket.on("song_changed", async ({ song, currentTime: ct }) => {
       setCurrentSong(song);
       try {
         await liveAudio.loadLiveAndPlay(song, ct || 0);
         setNeedsInteraction(false);
-        if (!playing) liveAudio.pauseLive();
       } catch {
         setNeedsInteraction(true);
       }
     });
 
-    // Periodic time correction from admin
-    socket.on("time_sync", ({ currentTime: ct }) => {
-      // Only correct if drift > 3 seconds
+    // Periodic position correction (every 10s from server)
+    socket.on("time_sync", ({ currentTime: ct, songIndex }) => {
+      // Only correct if drift > 3 seconds to avoid stuttering
       if (Math.abs(liveAudio.liveCurrentTime - ct) > 3) {
-        liveAudio.seekLive(ct);
+        liveAudio.syncLivePosition(ct);
       }
     });
 
@@ -171,11 +151,9 @@ export default function Live() {
     });
 
     return () => {
-      // Leave room but keep audio playing
       socket.emit("leave_live");
       socket.off("listener_count");
       socket.off("sync_on_join");
-      socket.off("sync_playback");
       socket.off("song_changed");
       socket.off("time_sync");
       socket.off("new_message");
@@ -184,36 +162,35 @@ export default function Live() {
     };
   }, [session?.isActive]);
 
-  // ── Media Session API (lock screen controls) ──────────
+  // ── Media Session API ─────────────────────────────────
   useEffect(() => {
     if (!currentSong || !("mediaSession" in navigator)) return;
     navigator.mediaSession.metadata = new MediaMetadata({
       title:  currentSong.name   || "Live Stream",
-      artist: currentSong.artist || "SunaSathi Live",
+      artist: currentSong.artist || "SunaSathi Radio",
       album:  session?.playlistName || "Live Session",
     });
-    navigator.mediaSession.setActionHandler("play",  () => {
-      liveAudio.resumeLive().catch(() => {});
-    });
-    navigator.mediaSession.setActionHandler("pause", () => {
-      liveAudio.pauseLive();
-    });
+    // Radio — disable skip controls, playback is server-controlled
+    navigator.mediaSession.setActionHandler("play",  null);
+    navigator.mediaSession.setActionHandler("pause", null);
+    navigator.mediaSession.setActionHandler("nexttrack",     null);
+    navigator.mediaSession.setActionHandler("previoustrack", null);
   }, [currentSong, session]);
 
-  // ── Chat scroll ────────────────────────────────────────
+  // ── Chat auto-scroll ──────────────────────────────────
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // ── Tap to start (autoplay blocked) ──────────────────
   const handleUserPlay = async () => {
     try {
-      // Seek to current estimated server position before resuming
-      const res = await api.get("/api/live/session");
-      const seekTo = res.data.estimatedCurrentTime || liveAudio.liveCurrentTime;
+      const res    = await api.get("/api/live/session");
+      const seekTo = res.data.positionInSong || liveAudio.liveCurrentTime;
       await liveAudio.loadLiveAndPlay(currentSong, seekTo);
       setNeedsInteraction(false);
     } catch (err) {
-      console.error("Play failed:", err);
+      console.error("User play failed:", err);
     }
   };
 
@@ -228,20 +205,20 @@ export default function Live() {
     socketRef.current?.emit("send_reaction", { reaction });
   };
 
-  // ── Loading ────────────────────────────────────────────
+  // ── Loading ───────────────────────────────────────────
   if (loading) {
     return (
       <main className="min-h-screen bg-[#0B0F1A] text-white flex items-center justify-center">
-        <div className="flex items-center gap-3">
-          <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-          <span className="text-gray-400">Joining live stream...</span>
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 rounded-full border-4 border-red-500/20 border-t-red-500 animate-spin" />
+          <p className="text-gray-400 text-sm">Tuning in to the live stream...</p>
         </div>
       </main>
     );
   }
 
-  // ── No session ─────────────────────────────────────────
-  if (!session?.isActive || sessionEnded) {
+  // ── No session / ended ────────────────────────────────
+  if (!session?.isActive || sessionEnded || loadError) {
     return (
       <main className="min-h-screen bg-[#0B0F1A] text-white flex items-center justify-center px-4">
         <div className="text-center max-w-md">
@@ -249,11 +226,15 @@ export default function Live() {
             <Radio className="w-12 h-12 text-indigo-400" />
           </div>
           <h1 className="text-3xl font-bold mb-3">
-            {sessionEnded ? "Stream Ended" : "No Live Stream"}
+            {sessionEnded ? "Stream Ended"
+              : loadError ? "Connection Error"
+              : "No Live Stream"}
           </h1>
           <p className="text-gray-400 mb-8">
             {sessionEnded
               ? "The admin has ended the live stream. Thanks for listening!"
+              : loadError
+              ? loadError
               : "There's no active live stream right now. Check back later."}
           </p>
           <button
@@ -267,7 +248,7 @@ export default function Live() {
     );
   }
 
-  // ── Main UI ────────────────────────────────────────────
+  // ── Main UI ───────────────────────────────────────────
   return (
     <main className="min-h-screen bg-[#0B0F1A] text-white flex flex-col">
 
@@ -282,7 +263,9 @@ export default function Live() {
           </button>
           <div className="flex items-center gap-2 px-4 py-2 bg-red-500/10 rounded-full border border-red-500/30">
             <div className="w-2.5 h-2.5 rounded-full bg-red-400 animate-pulse" />
-            <span className="text-sm font-semibold text-red-400 uppercase tracking-widest">Live</span>
+            <span className="text-sm font-semibold text-red-400 uppercase tracking-widest">
+              Live Radio
+            </span>
           </div>
           <span className="text-white font-semibold hidden sm:block">
             {session.playlistName}
@@ -294,19 +277,18 @@ export default function Live() {
         </div>
       </div>
 
-      {/* Needs interaction banner */}
+      {/* Autoplay blocked banner */}
       {needsInteraction && (
-        <div className="bg-indigo-500/10 border-b border-indigo-500/20 px-4 py-3 flex items-center justify-between gap-4">
+        <div
+          className="bg-indigo-500/10 border-b border-indigo-500/20 px-4 py-3 flex items-center justify-between gap-4 cursor-pointer hover:bg-indigo-500/20 transition-colors"
+          onClick={handleUserPlay}
+        >
           <p className="text-sm text-indigo-300">
-            Tap play to start listening from where the stream is right now
+            👆 Tap anywhere here to start the live stream from the current position
           </p>
-          <button
-            onClick={handleUserPlay}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-semibold transition-all flex-shrink-0"
-          >
-            <Play className="w-4 h-4" />
-            Play
-          </button>
+          <div className="px-4 py-1.5 rounded-lg bg-indigo-500 text-white text-sm font-semibold flex-shrink-0">
+            Start
+          </div>
         </div>
       )}
 
@@ -321,7 +303,10 @@ export default function Live() {
               <div
                 key={r.id}
                 className="absolute bottom-24 text-3xl animate-bounce"
-                style={{ left: `${15 + Math.random() * 70}%`, animationDuration: "0.8s" }}
+                style={{
+                  left:              `${15 + Math.random() * 70}%`,
+                  animationDuration: "0.8s",
+                }}
               >
                 {r.reaction}
               </div>
@@ -329,14 +314,14 @@ export default function Live() {
           </div>
 
           {/* Album art */}
-          <div className="relative w-56 h-56 sm:w-72 sm:h-72 rounded-3xl bg-gradient-to-br from-indigo-500/30 via-purple-500/30 to-pink-500/30 flex items-center justify-center mb-8 border border-white/10 shadow-2xl shadow-indigo-500/20">
+          <div className="relative w-56 h-56 sm:w-72 sm:h-72 rounded-3xl bg-gradient-to-br from-red-500/20 via-pink-500/20 to-indigo-500/20 flex items-center justify-center mb-8 border border-white/10 shadow-2xl shadow-red-500/10">
             <Music2 className="w-20 h-20 text-white/10" />
             {isPlaying && (
               <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-end gap-1">
                 {[3, 5, 8, 6, 4, 7, 5, 3].map((h, i) => (
                   <div
                     key={i}
-                    className="w-1.5 bg-white/60 rounded-full animate-pulse"
+                    className="w-1.5 bg-red-400/70 rounded-full animate-pulse"
                     style={{ height: `${h * 3}px`, animationDelay: `${i * 0.08}s` }}
                   />
                 ))}
@@ -368,11 +353,11 @@ export default function Live() {
             </div>
           </div>
 
-          {/* Progress bar — display only, not seekable by user */}
+          {/* Progress bar — read-only, radio controlled */}
           <div className="w-full max-w-md mb-1">
             <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
               <div
-                className="h-1.5 bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-1000"
+                className="h-1.5 bg-gradient-to-r from-red-500 to-pink-500 rounded-full transition-all duration-1000"
                 style={{ width: `${progress}%` }}
               />
             </div>
@@ -383,7 +368,7 @@ export default function Live() {
           </div>
 
           {/* Volume */}
-          <div className="flex items-center gap-3 w-full max-w-md mb-6">
+          <div className="flex items-center gap-3 w-full max-w-md mb-8">
             <Volume2 className="w-4 h-4 text-gray-400 flex-shrink-0" />
             <input
               type="range"
@@ -392,32 +377,33 @@ export default function Live() {
               step={0.01}
               value={volume}
               onChange={(e) => setVolume(Number(e.target.value))}
-              className="flex-1 accent-indigo-500"
+              className="flex-1 accent-red-500"
             />
             <span className="text-xs text-gray-400 w-9 text-right">
               {Math.round(volume * 100)}%
             </span>
           </div>
 
-          {/*
-            Local play/pause — only controls user's local audio.
-            The admin controls the actual stream state.
-            No "pause" button shown — user either listens or stops
-            listening. They can go play another song instead.
-          */}
-          <div className="mb-6">
-            {needsInteraction || !isPlaying ? (
-              <button
-                onClick={handleUserPlay}
-                className="w-14 h-14 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 flex items-center justify-center text-white shadow-xl shadow-indigo-500/40 hover:scale-105 transition-all"
-                title="Play from current position"
-              >
-                <Play className="w-6 h-6 ml-0.5" />
-              </button>
-            ) : (
+          {/* Status badge */}
+          <div className="mb-8">
+            {isPlaying ? (
               <div className="flex items-center gap-2 px-5 py-3 bg-red-500/10 border border-red-500/20 rounded-full">
                 <div className="w-2 h-2 rounded-full bg-red-400 animate-pulse" />
-                <span className="text-sm font-medium text-red-400">Streaming Live</span>
+                <span className="text-sm font-medium text-red-400">
+                  Broadcasting Live
+                </span>
+              </div>
+            ) : needsInteraction ? (
+              <button
+                onClick={handleUserPlay}
+                className="flex items-center gap-2 px-5 py-3 bg-indigo-500 hover:bg-indigo-400 rounded-full text-white font-semibold transition-all"
+              >
+                Tap to Listen
+              </button>
+            ) : (
+              <div className="flex items-center gap-2 px-5 py-3 bg-white/5 border border-white/10 rounded-full">
+                <div className="w-2 h-2 rounded-full bg-gray-500" />
+                <span className="text-sm text-gray-400">Connecting...</span>
               </div>
             )}
           </div>
@@ -428,7 +414,7 @@ export default function Live() {
               <button
                 key={r}
                 onClick={() => sendReaction(r)}
-                className="w-12 h-12 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-indigo-500/50 flex items-center justify-center text-2xl transition-all hover:scale-110 active:scale-95"
+                className="w-12 h-12 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-red-500/50 flex items-center justify-center text-2xl transition-all hover:scale-110 active:scale-95"
               >
                 {r}
               </button>
@@ -451,16 +437,23 @@ export default function Live() {
             ) : (
               messages.map((msg) => (
                 <div key={msg._id} className="flex gap-2">
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500/20 to-purple-500/20 border border-indigo-500/30 flex items-center justify-center flex-shrink-0 text-xs font-bold text-indigo-300">
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-red-500/20 to-pink-500/20 border border-red-500/20 flex items-center justify-center flex-shrink-0 text-xs font-bold text-red-300">
                     {msg.userName?.[0]?.toUpperCase()}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-baseline gap-2">
-                      <span className={`text-xs font-semibold ${msg.userId === user?._id ? "text-indigo-400" : "text-gray-300"}`}>
+                      <span
+                        className={`text-xs font-semibold ${
+                          msg.userId === user?._id ? "text-red-400" : "text-gray-300"
+                        }`}
+                      >
                         {msg.userId === user?._id ? "You" : msg.userName}
                       </span>
                       <span className="text-xs text-gray-600">
-                        {new Date(msg.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        {new Date(msg.createdAt).toLocaleTimeString([], {
+                          hour:   "2-digit",
+                          minute: "2-digit",
+                        })}
                       </span>
                     </div>
                     <p className="text-sm text-gray-300 break-words">{msg.message}</p>
@@ -478,16 +471,19 @@ export default function Live() {
                 value={messageInput}
                 onChange={(e) => setMessageInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                  }
                 }}
                 placeholder="Say something..."
                 maxLength={300}
-                className="flex-1 px-4 py-2.5 bg-white/5 border border-white/10 rounded-xl text-white text-sm placeholder-gray-500 focus:outline-none focus:border-indigo-500/50 transition-all"
+                className="flex-1 px-4 py-2.5 bg-white/5 border border-white/10 rounded-xl text-white text-sm placeholder-gray-500 focus:outline-none focus:border-red-500/50 transition-all"
               />
               <button
                 onClick={sendMessage}
                 disabled={!messageInput.trim()}
-                className="w-10 h-10 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 flex items-center justify-center text-white transition-all hover:shadow-lg hover:shadow-indigo-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="w-10 h-10 rounded-xl bg-gradient-to-r from-red-500 to-pink-500 flex items-center justify-center text-white transition-all hover:shadow-lg hover:shadow-red-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <Send className="w-4 h-4" />
               </button>

@@ -1,14 +1,36 @@
-const Song   = require("../models/Song");
-const Artist = require("../models/Artist");
-const fs     = require("fs").promises;
-const path   = require("path");
+const Song           = require("../models/Song");
+const Artist         = require("../models/Artist");
+const fs             = require("fs").promises;
+const path           = require("path");
+const radioScheduler = require("../services/radioScheduler");
+
+// ── Duration extraction via ffprobe ────────────────────
+const { execFile } = require("child_process");
+const util         = require("util");
+const execFileAsync = util.promisify(execFile);
+
+async function extractDuration(filePath) {
+  try {
+    const { stdout } = await execFileAsync("ffprobe", [
+      "-v", "error",
+      "-show_entries", "format=duration",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      filePath,
+    ]);
+    const dur = parseFloat(stdout.trim());
+    return isNaN(dur) ? 0 : dur;
+  } catch (err) {
+    console.warn("ffprobe failed, duration unknown:", err.message);
+    return 0;
+  }
+}
 
 /* GET ALL ARTISTS */
 exports.getArtists = async (req, res) => {
   try {
     const artists = await Artist.find().sort({ name: 1 });
     res.json(artists);
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Failed to fetch artists" });
   }
 };
@@ -21,27 +43,23 @@ exports.createArtist = async (req, res) => {
       return res.status(400).json({ message: "Artist name is required" });
     }
 
-    // Check if artist already exists
     const existing = await Artist.findOne({
       name: { $regex: new RegExp(`^${name.trim()}$`, "i") },
     });
 
     if (existing) {
-      return res.status(400).json({
-        message: "Artist already exists",
-        artist: existing,
-      });
+      return res.status(400).json({ message: "Artist already exists", artist: existing });
     }
 
     const artist = await Artist.create({
       name:      name.trim(),
-      bio:       bio?.trim() || "",
+      bio:       bio?.trim()   || "",
       genre:     genre?.trim() || "",
       createdBy: req.user.id,
     });
 
     res.status(201).json(artist);
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Failed to create artist" });
   }
 };
@@ -55,15 +73,17 @@ exports.addSong = async (req, res) => {
       return res.status(400).json({ message: "All fields required" });
     }
 
-    // Validate artistId if provided
     let resolvedArtistId = null;
     if (artistId) {
       const found = await Artist.findById(artistId);
-      if (!found) {
-        return res.status(400).json({ message: "Selected artist not found" });
-      }
+      if (!found) return res.status(400).json({ message: "Selected artist not found" });
       resolvedArtistId = found._id;
     }
+
+    // Extract duration from uploaded file
+    const uploadsDir = path.resolve(__dirname, "../uploads");
+    const filePath   = path.join(uploadsDir, req.file.filename);
+    const duration   = await extractDuration(filePath);
 
     const song = await Song.create({
       name,
@@ -72,9 +92,13 @@ exports.addSong = async (req, res) => {
       genre,
       year,
       file:       req.file.filename,
+      duration,
       isLiveOnly: isLiveOnly === "true" || isLiveOnly === true,
       createdBy:  req.user.id,
     });
+
+    // Reload radio scheduler so new song is included
+    radioScheduler.reload().catch(console.error);
 
     res.status(201).json(song);
   } catch (error) {
@@ -88,7 +112,7 @@ exports.getSongs = async (req, res) => {
   try {
     const songs = await Song.find({ isLiveOnly: { $ne: true } }).sort({ createdAt: -1 });
     res.json(songs);
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Failed to fetch songs" });
   }
 };
@@ -98,7 +122,7 @@ exports.getAllSongs = async (req, res) => {
   try {
     const songs = await Song.find().sort({ createdAt: -1 });
     res.json(songs);
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Failed to fetch songs" });
   }
 };
@@ -107,9 +131,7 @@ exports.getAllSongs = async (req, res) => {
 exports.deleteSong = async (req, res) => {
   try {
     const song = await Song.findById(req.params.id);
-    if (!song) {
-      return res.status(404).json({ message: "Song not found" });
-    }
+    if (!song) return res.status(404).json({ message: "Song not found" });
 
     const sanitizedFilename = path.basename(song.file);
     const uploadsDir        = path.resolve(__dirname, "../uploads");
@@ -120,15 +142,15 @@ exports.deleteSong = async (req, res) => {
       return res.status(400).json({ message: "Invalid file path" });
     }
 
-    try {
-      await fs.unlink(resolvedPath);
-    } catch (fileError) {
-      console.error("Failed to delete audio file:", fileError);
-    }
+    try { await fs.unlink(resolvedPath); } catch {}
 
     await Song.findByIdAndDelete(req.params.id);
+
+    // Reload scheduler after deletion
+    radioScheduler.reload().catch(console.error);
+
     res.json({ message: "Song deleted successfully" });
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Failed to delete song" });
   }
 };

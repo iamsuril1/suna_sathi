@@ -1,5 +1,5 @@
 const multer = require("multer");
-const path = require("path");
+const path   = require("path");
 
 const storage = multer.diskStorage({
   destination: "uploads/",
@@ -13,19 +13,30 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-  // Only allow MP3 files
-  if (file.mimetype === "audio/mpeg") {
+  const allowed = [
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/flac",
+    "audio/x-flac",
+    "audio/aac",
+    "audio/ogg",
+    "audio/mp4",
+    "audio/x-m4a",
+  ];
+  if (allowed.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error("Only MP3 files are allowed"), false);
+    cb(new Error("Only audio files are allowed"), false);
   }
 };
 
-module.exports = multer({ 
-  storage, 
+module.exports = multer({
+  storage,
   fileFilter,
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
-    files: 1 // Only allow 1 file at a time
-  }
+    fileSize: 1024 * 1024 * 1024, // 1 GB
+    files:    1,
+  },
 });

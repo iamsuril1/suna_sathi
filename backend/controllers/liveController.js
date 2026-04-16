@@ -1,29 +1,44 @@
-const LiveSession = require("../models/LiveSession");
-const ChatMessage = require("../models/ChatMessage");
-const Song        = require("../models/Song");
+const LiveSession    = require("../models/LiveSession");
+const ChatMessage    = require("../models/ChatMessage");
+const Song           = require("../models/Song");
+const radioScheduler = require("../services/radioScheduler");
 
-/* GET CURRENT LIVE SESSION */
+/* GET CURRENT LIVE SESSION — returns radio-clock state */
 exports.getLiveSession = async (req, res) => {
   try {
     const session = await LiveSession.findOne({ isActive: true })
-      .populate("currentSong")
-      .populate("hostedBy", "name")
-      .populate("playlist");
+      .populate("hostedBy", "name");
 
     if (!session) return res.json({ isActive: false });
 
-    // Calculate estimated current playback time
-    let estimatedTime = session.currentTime || 0;
-    if (session.isPlaying && session.updatedAt) {
-      const elapsed = (Date.now() - new Date(session.updatedAt).getTime()) / 1000;
-      estimatedTime = Math.max(0, (session.currentTime || 0) + elapsed);
+    // Ensure scheduler is loaded
+    if (!radioScheduler.loaded) await radioScheduler.load();
+
+    const state = radioScheduler.getCurrentState();
+    if (!state) {
+      return res.json({ isActive: false, reason: "No songs in scheduler" });
     }
 
+    // Populate full song document
+    const song = await Song.findById(state.song._id);
+
     res.json({
-      ...session.toObject(),
-      estimatedCurrentTime: estimatedTime,
+      isActive:         true,
+      _id:              session._id,
+      playlistName:     session.playlistName,
+      hostedBy:         session.hostedBy,
+      listeners:        session.listeners || 0,
+      // Radio clock fields
+      currentSong:      song,
+      songIndex:        state.songIndex,
+      positionInSong:   state.positionInSong,   // exact seconds to seek to
+      isPlaying:        true,                   // radio is always playing
+      streamStartUtc:   radioScheduler.streamStart.toISOString(),
+      totalSongs:       radioScheduler.songs.length,
+      totalDuration:    radioScheduler.totalDuration,
     });
   } catch (error) {
+    console.error("getLiveSession error:", error);
     res.status(500).json({ message: "Failed to fetch live session" });
   }
 };
@@ -31,53 +46,39 @@ exports.getLiveSession = async (req, res) => {
 /* START LIVE SESSION (ADMIN) */
 exports.startLiveSession = async (req, res) => {
   try {
-    const { playlistId, playlistName, liveOnly } = req.body;
+    const { playlistName } = req.body;
 
     await LiveSession.updateMany({ isActive: true }, { isActive: false });
 
-    let songs = [];
+    // Pre-load scheduler
+    if (!radioScheduler.loaded) await radioScheduler.load();
 
-    if (liveOnly) {
-      const liveSongs = await Song.find({ isLiveOnly: true }).select("_id");
-      songs = liveSongs.map((s) => s._id);
-    } else if (playlistId) {
-      const Playlist = require("../models/Playlist");
-      const playlist = await Playlist.findById(playlistId).populate("songs");
-      if (playlist) songs = playlist.songs.map((s) => s._id);
-    }
-
-    if (!songs.length) {
-      const allSongs = await Song.find({ isLiveOnly: { $ne: true } }).select("_id");
-      songs = allSongs.map((s) => s._id);
-    }
-
-    if (!songs.length) {
-      const allSongs = await Song.find().select("_id");
-      songs = allSongs.map((s) => s._id);
-    }
-
-    if (!songs.length) {
+    if (!radioScheduler.songs.length) {
       return res.status(400).json({ message: "No songs available to stream" });
     }
 
     const session = await LiveSession.create({
-      isActive:         true,
-      hostedBy:         req.user.id,
-      playlist:         songs,
-      playlistName:     playlistName || "Live Session",
-      currentSong:      songs[0],
-      currentSongIndex: 0,
-      isPlaying:        false,
-      currentTime:      0,
-      listeners:        0,
+      isActive:     true,
+      hostedBy:     req.user.id,
+      playlistName: playlistName || "SunaSathi Radio",
+      listeners:    0,
     });
 
     const populated = await LiveSession.findById(session._id)
-      .populate("currentSong")
-      .populate("hostedBy", "name")
-      .populate("playlist");
+      .populate("hostedBy", "name");
 
-    res.status(201).json(populated);
+    const state = radioScheduler.getCurrentState();
+    const song  = await Song.findById(state.song._id);
+
+    res.status(201).json({
+      ...populated.toObject(),
+      currentSong:    song,
+      songIndex:      state.songIndex,
+      positionInSong: state.positionInSong,
+      isPlaying:      true,
+      streamStartUtc: radioScheduler.streamStart.toISOString(),
+      totalSongs:     radioScheduler.songs.length,
+    });
   } catch (error) {
     console.error("Start live error:", error);
     res.status(500).json({ message: "Failed to start live session" });
@@ -89,7 +90,7 @@ exports.endLiveSession = async (req, res) => {
   try {
     await LiveSession.updateMany({ isActive: true }, { isActive: false });
     res.json({ message: "Live session ended" });
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Failed to end live session" });
   }
 };
@@ -105,7 +106,29 @@ exports.getChatMessages = async (req, res) => {
       .limit(100);
 
     res.json(messages);
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: "Failed to fetch messages" });
+  }
+};
+
+/* GET RADIO STATE — lightweight poll endpoint */
+exports.getRadioState = async (req, res) => {
+  try {
+    if (!radioScheduler.loaded) await radioScheduler.load();
+
+    const state = radioScheduler.getCurrentState();
+    if (!state) return res.json({ active: false });
+
+    const song = await Song.findById(state.song._id).select("_id name artist genre year file duration");
+
+    res.json({
+      active:         true,
+      song,
+      songIndex:      state.songIndex,
+      positionInSong: state.positionInSong,
+      isPlaying:      true,
+    });
+  } catch {
+    res.status(500).json({ message: "Failed to get radio state" });
   }
 };
