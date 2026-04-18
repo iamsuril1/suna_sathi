@@ -3,11 +3,9 @@ const Artist         = require("../models/Artist");
 const fs             = require("fs").promises;
 const path           = require("path");
 const radioScheduler = require("../services/radioScheduler");
-
-// ── Duration extraction via ffprobe ────────────────────
-const { execFile } = require("child_process");
-const util         = require("util");
-const execFileAsync = util.promisify(execFile);
+const { execFile }   = require("child_process");
+const util           = require("util");
+const execFileAsync  = util.promisify(execFile);
 
 async function extractDuration(filePath) {
   try {
@@ -19,8 +17,7 @@ async function extractDuration(filePath) {
     ]);
     const dur = parseFloat(stdout.trim());
     return isNaN(dur) ? 0 : dur;
-  } catch (err) {
-    console.warn("ffprobe failed, duration unknown:", err.message);
+  } catch {
     return 0;
   }
 }
@@ -29,7 +26,14 @@ async function extractDuration(filePath) {
 exports.getArtists = async (req, res) => {
   try {
     const artists = await Artist.find().sort({ name: 1 });
-    res.json(artists);
+    // Add song count per artist
+    const artistsWithCount = await Promise.all(
+      artists.map(async (a) => {
+        const count = await Song.countDocuments({ artistId: a._id });
+        return { ...a.toObject(), songCount: count };
+      })
+    );
+    res.json(artistsWithCount);
   } catch {
     res.status(500).json({ message: "Failed to fetch artists" });
   }
@@ -51,16 +55,43 @@ exports.createArtist = async (req, res) => {
       return res.status(400).json({ message: "Artist already exists", artist: existing });
     }
 
+    // Handle uploaded photo
+    const photo = req.file ? `artists/${req.file.filename}` : "";
+
     const artist = await Artist.create({
       name:      name.trim(),
       bio:       bio?.trim()   || "",
       genre:     genre?.trim() || "",
+      photo,
       createdBy: req.user.id,
     });
 
     res.status(201).json(artist);
   } catch {
     res.status(500).json({ message: "Failed to create artist" });
+  }
+};
+
+/* UPDATE ARTIST PHOTO */
+exports.updateArtistPhoto = async (req, res) => {
+  try {
+    const artist = await Artist.findById(req.params.id);
+    if (!artist) return res.status(404).json({ message: "Artist not found" });
+
+    if (!req.file) return res.status(400).json({ message: "No image uploaded" });
+
+    // Delete old photo
+    if (artist.photo) {
+      const oldPath = path.join(__dirname, "../uploads", artist.photo);
+      try { await fs.unlink(oldPath); } catch {}
+    }
+
+    artist.photo = `artists/${req.file.filename}`;
+    await artist.save();
+
+    res.json(artist);
+  } catch {
+    res.status(500).json({ message: "Failed to update artist photo" });
   }
 };
 
@@ -80,10 +111,9 @@ exports.addSong = async (req, res) => {
       resolvedArtistId = found._id;
     }
 
-    // Extract duration from uploaded file
-    const uploadsDir = path.resolve(__dirname, "../uploads");
-    const filePath   = path.join(uploadsDir, req.file.filename);
-    const duration   = await extractDuration(filePath);
+    // Extract duration
+    const filePath = path.join(__dirname, "../uploads/audio", req.file.filename);
+    const duration = await extractDuration(filePath);
 
     const song = await Song.create({
       name,
@@ -91,13 +121,12 @@ exports.addSong = async (req, res) => {
       artistId:   resolvedArtistId,
       genre,
       year,
-      file:       req.file.filename,
+      file:       `audio/${req.file.filename}`,
       duration,
       isLiveOnly: isLiveOnly === "true" || isLiveOnly === true,
       createdBy:  req.user.id,
     });
 
-    // Reload radio scheduler so new song is included
     radioScheduler.reload().catch(console.error);
 
     res.status(201).json(song);
@@ -107,23 +136,85 @@ exports.addSong = async (req, res) => {
   }
 };
 
-/* GET SONGS — regular only (no live-only) */
+/* GET SONGS with search + genre filter */
 exports.getSongs = async (req, res) => {
   try {
-    const songs = await Song.find({ isLiveOnly: { $ne: true } }).sort({ createdAt: -1 });
+    const { search, genre } = req.query;
+    const query = { isLiveOnly: { $ne: true } };
+
+    if (search?.trim()) {
+      const q = search.trim();
+      query.$or = [
+        { name:   { $regex: q, $options: "i" } },
+        { artist: { $regex: q, $options: "i" } },
+        { genre:  { $regex: q, $options: "i" } },
+      ];
+    }
+
+    if (genre && genre !== "All Tracks") {
+      query.genre = { $regex: new RegExp(`^${genre}$`, "i") };
+    }
+
+    const songs = await Song.find(query).sort({ createdAt: -1 });
     res.json(songs);
   } catch {
     res.status(500).json({ message: "Failed to fetch songs" });
   }
 };
 
+/* GET ALL GENRES (distinct) */
+exports.getGenres = async (req, res) => {
+  try {
+    const genres = await Song.distinct("genre", { isLiveOnly: { $ne: true } });
+    res.json(genres.filter(Boolean).sort());
+  } catch {
+    res.status(500).json({ message: "Failed to fetch genres" });
+  }
+};
+
 /* GET ALL SONGS INCLUDING LIVE-ONLY (ADMIN) */
 exports.getAllSongs = async (req, res) => {
   try {
-    const songs = await Song.find().sort({ createdAt: -1 });
+    const { search, genre, liveOnly } = req.query;
+    const query = {};
+
+    if (liveOnly === "true") {
+      query.isLiveOnly = true;
+    } else if (liveOnly === "false") {
+      query.isLiveOnly = { $ne: true };
+    }
+
+    if (search?.trim()) {
+      const q = search.trim();
+      query.$or = [
+        { name:   { $regex: q, $options: "i" } },
+        { artist: { $regex: q, $options: "i" } },
+        { genre:  { $regex: q, $options: "i" } },
+      ];
+    }
+
+    if (genre && genre !== "all") {
+      query.genre = { $regex: new RegExp(`^${genre}$`, "i") };
+    }
+
+    const songs = await Song.find(query).sort({ createdAt: -1 });
     res.json(songs);
   } catch {
     res.status(500).json({ message: "Failed to fetch songs" });
+  }
+};
+
+/* GET SONGS BY ARTIST */
+exports.getSongsByArtist = async (req, res) => {
+  try {
+    const { artistId } = req.params;
+    const songs = await Song.find({
+      artistId,
+      isLiveOnly: { $ne: true },
+    }).sort({ createdAt: -1 });
+    res.json(songs);
+  } catch {
+    res.status(500).json({ message: "Failed to fetch artist songs" });
   }
 };
 
@@ -145,8 +236,6 @@ exports.deleteSong = async (req, res) => {
     try { await fs.unlink(resolvedPath); } catch {}
 
     await Song.findByIdAndDelete(req.params.id);
-
-    // Reload scheduler after deletion
     radioScheduler.reload().catch(console.error);
 
     res.json({ message: "Song deleted successfully" });

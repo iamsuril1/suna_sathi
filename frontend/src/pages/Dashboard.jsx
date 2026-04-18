@@ -1,38 +1,19 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
-  ArrowLeft,
-  Search,
-  Music2,
-  Heart,
-  Plus,
-  Share2,
-  Play,
-  Pause,
-  SkipBack,
-  SkipForward,
-  Shuffle,
-  Repeat,
-  ListMusic,
-  X,
-  ChevronRight,
-  Volume2,
-  Clock,
-  LayoutGrid,
-  LayoutList,
-  Mic2,
-  ChevronUp,
-  Radio,
+  ArrowLeft, Search, Music2, Heart, Plus, Share2,
+  Play, Pause, SkipBack, SkipForward, Shuffle, Repeat,
+  ListMusic, X, ChevronRight, Volume2, Clock,
+  LayoutGrid, LayoutList, Mic2, ChevronUp, Radio,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import api from "../services/api";
 import Sidebar from "../components/Sidebar";
 import ShareModal from "../components/ShareModal";
 import { liveAudio } from "../services/liveAudio";
+import { useAuth } from "../context/AuthContext";
 
 const AUDIOBASE = `${import.meta.env.VITE_API_URL || "http://localhost:5000"}/uploads`;
-const genres    = ["All Tracks", "Pop", "Rock", "Electronic", "Hip Hop", "Indie", "Jazz"];
 
-const LIKED_KEY  = "likedSongIds";
 const RECENT_KEY = "recentSongIds";
 const MAX_RECENT = 6;
 
@@ -54,19 +35,24 @@ const fetchAudioDuration = (url) =>
   });
 
 export default function Dashboard() {
+  const { likedSongIds, toggleLike } = useAuth();
+
+  // ── Data ───────────────────────────────────────────────
   const [songs,            setSongs]            = useState([]);
   const [playlists,        setPlaylists]        = useState([]);
   const [songDurations,    setSongDurations]    = useState({});
   const [loadingDurations, setLoadingDurations] = useState(false);
+  const [availableGenres,  setAvailableGenres]  = useState(["All Tracks"]);
 
+  // ── View state ─────────────────────────────────────────
   const [mode,             setMode]             = useState("all");
   const [selectedPlaylist, setSelectedPlaylist] = useState(null);
+  const [activeGenre,      setActiveGenre]      = useState("All Tracks");
+  const [searchQuery,      setSearchQuery]      = useState("");
+  const [viewMode,         setViewMode]         = useState("list");
+  const [view,             setView]             = useState("list");
 
-  const [activeGenre, setActiveGenre] = useState("All Tracks");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [viewMode,    setViewMode]    = useState("list");
-  const [view,        setView]        = useState("list");
-
+  // ── Player state (synced from liveAudio singleton) ─────
   const [currentSong, setCurrentSong] = useState(null);
   const [isPlaying,   setIsPlaying]   = useState(false);
   const [progress,    setProgress]    = useState(0);
@@ -74,39 +60,32 @@ export default function Dashboard() {
   const [duration,    setDuration]    = useState(0);
   const [volume,      setVolume]      = useState(0.7);
 
+  // ── Modals ─────────────────────────────────────────────
   const [showPlaylistModal, setShowPlaylistModal] = useState(false);
   const [selectedSong,      setSelectedSong]      = useState(null);
-  const [showShareModal,    setShowShareModal]    = useState(false);
-  const [shareSong,         setShareSong]         = useState(null);
+  const [showShareModal,    setShowShareModal]     = useState(false);
+  const [shareSong,         setShareSong]          = useState(null);
 
+  // ── Playback options ───────────────────────────────────
   const [isShuffle,  setIsShuffle]  = useState(false);
-  const [repeatMode, setRepeatMode] = useState("off");
+  const [repeatMode, setRepeatMode] = useState("off"); // off | all | one
 
-  const [likedSongIds, setLikedSongIds] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(LIKED_KEY) || "[]"); }
-    catch { return []; }
-  });
-
+  // ── Recently played ────────────────────────────────────
   const [recentSongIds, setRecentSongIds] = useState(() => {
     try { return JSON.parse(localStorage.getItem(RECENT_KEY) || "[]"); }
     catch { return []; }
   });
 
+  // ── Sleep timer ────────────────────────────────────────
   const [timerActive,           setTimerActive]           = useState(false);
   const [timerRemainingSeconds, setTimerRemainingSeconds] = useState(0);
   const [showTimerModal,        setShowTimerModal]        = useState(false);
   const timerRef = useRef(null);
 
-  // Live session notification bar
+  // ── Live session notification ──────────────────────────
   const [liveSession,      setLiveSession]      = useState(null);
   const [liveBarDismissed, setLiveBarDismissed] = useState(false);
-  // Track whether live is active so mini player can show return button
   const [liveStreamActive, setLiveStreamActive] = useState(false);
-
-  // ── Volume → liveAudio ────────────────────────────────
-  useEffect(() => {
-    liveAudio.setNormalVolume(volume);
-  }, [volume]);
 
   // ── Subscribe to normal audio state ───────────────────
   useEffect(() => {
@@ -115,15 +94,23 @@ export default function Dashboard() {
       setCurrentTime(liveAudio.normalCurrentTime);
       setDuration(liveAudio.normalDuration);
       if (liveAudio.normalDuration > 0) {
-        setProgress(
-          (liveAudio.normalCurrentTime / liveAudio.normalDuration) * 100
-        );
+        setProgress((liveAudio.normalCurrentTime / liveAudio.normalDuration) * 100);
       }
     });
     return unsub;
   }, []);
 
-  // ── Timer ──────────────────────────────────────────────
+  // ── Volume ─────────────────────────────────────────────
+  useEffect(() => {
+    liveAudio.setNormalVolume(volume);
+  }, [volume]);
+
+  // ── Recent songs persistence ───────────────────────────
+  useEffect(() => {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(recentSongIds));
+  }, [recentSongIds]);
+
+  // ── Sleep timer ────────────────────────────────────────
   const cancelTimer = useCallback(() => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
     setTimerActive(false);
@@ -152,21 +139,7 @@ export default function Dashboard() {
 
   useEffect(() => () => cancelTimer(), [cancelTimer]);
 
-  useEffect(() => {
-    localStorage.setItem(LIKED_KEY,  JSON.stringify(likedSongIds));
-  }, [likedSongIds]);
-
-  useEffect(() => {
-    localStorage.setItem(RECENT_KEY, JSON.stringify(recentSongIds));
-  }, [recentSongIds]);
-
-  const toggleLike = (songId) =>
-    setLikedSongIds((prev) =>
-      prev.includes(songId)
-        ? prev.filter((id) => id !== songId)
-        : [...prev, songId]
-    );
-
+  // ── Helpers ────────────────────────────────────────────
   const pushRecent = useCallback((songId) => {
     if (!songId) return;
     setRecentSongIds((prev) =>
@@ -195,10 +168,14 @@ export default function Dashboard() {
   }, []);
 
   const loadSongs = useCallback(async () => {
-    const res  = await api.get("/api/songs");
-    const list = res.data || [];
+    const [songsRes, genresRes] = await Promise.all([
+      api.get("/api/songs"),
+      api.get("/api/songs/genres"),
+    ]);
+    const list = songsRes.data || [];
     setSongs(list);
     loadDurations(list);
+    setAvailableGenres(["All Tracks", ...(genresRes.data || [])]);
   }, [loadDurations]);
 
   const refreshPlaylists = useCallback(async () => {
@@ -206,7 +183,7 @@ export default function Dashboard() {
     setPlaylists((res.data || []).map(normalizePlaylist));
   }, [normalizePlaylist]);
 
-  // Poll for live session every 30s
+  // ── Poll live session every 30s ────────────────────────
   useEffect(() => {
     const checkLive = async () => {
       try {
@@ -232,25 +209,33 @@ export default function Dashboard() {
     Promise.all([loadSongs(), refreshPlaylists()]);
   }, []);
 
-  // ── Derived ────────────────────────────────────────────
+  // ── Derived state ──────────────────────────────────────
   const queue = useMemo(() => {
     if (mode === "playlist") return selectedPlaylist?.songs || [];
     if (mode === "liked")    return songs.filter((s) => likedSongIds.includes(s._id));
     return songs;
   }, [mode, selectedPlaylist, songs, likedSongIds]);
 
+  // Only playable (non live-only) songs in queue
+  const playableQueue = useMemo(
+    () => queue.filter((s) => !s.isLiveOnly),
+    [queue]
+  );
+
   const currentIndex = useMemo(() => {
     if (!currentSong?._id) return -1;
-    return queue.findIndex((s) => s._id === currentSong._id);
-  }, [queue, currentSong?._id]);
+    return playableQueue.findIndex((s) => s._id === currentSong._id);
+  }, [playableQueue, currentSong?._id]);
 
   const filteredSongs = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return queue.filter((song) => {
+      if (song.isLiveOnly) return false; // never show live-only in user library
       const matchesSearch =
         !q ||
         song.name?.toLowerCase().includes(q) ||
-        song.artist?.toLowerCase().includes(q);
+        song.artist?.toLowerCase().includes(q) ||
+        song.genre?.toLowerCase().includes(q);
       const matchesGenre =
         activeGenre === "All Tracks" || song.genre === activeGenre;
       return matchesSearch && matchesGenre;
@@ -262,15 +247,14 @@ export default function Dashboard() {
     return recentSongIds
       .map((id) => map.get(id))
       .filter(Boolean)
-      .filter((s) => s._id !== currentSong?._id);
+      .filter((s) => !s.isLiveOnly && s._id !== currentSong?._id);
   }, [songs, recentSongIds, currentSong?._id]);
 
   const artists = useMemo(() => {
     const map = {};
     songs.forEach((s) => {
-      if (!s.artist) return;
-      if (!map[s.artist])
-        map[s.artist] = { name: s.artist, songs: [], genres: new Set() };
+      if (!s.artist || s.isLiveOnly) return;
+      if (!map[s.artist]) map[s.artist] = { name: s.artist, songs: [], genres: new Set() };
       map[s.artist].songs.push(s);
       if (s.genre) map[s.artist].genres.add(s.genre);
     });
@@ -282,15 +266,17 @@ export default function Dashboard() {
     [filteredSongs, songDurations]
   );
 
-  // ── Playback ───────────────────────────────────────────
+  // ── Playback controls ──────────────────────────────────
   const playSong = useCallback(async (song) => {
     if (!song?._id || !song.file) return;
+    if (song.isLiveOnly) return; // guard: never play live-only in normal player
+
     setCurrentSong(song);
     setProgress(0);
     setCurrentTime(0);
     setView("player");
     pushRecent(song._id);
-    // loadNormalAndPlay pauses live audio locally
+
     try {
       await liveAudio.loadNormalAndPlay(song, 0);
     } catch (err) {
@@ -312,28 +298,31 @@ export default function Dashboard() {
   }, [currentSong]);
 
   const handleNext = useCallback(() => {
-    if (!queue.length) return;
-    if (isShuffle && queue.length > 1) {
-      playSong(queue[Math.floor(Math.random() * queue.length)]);
+    if (!playableQueue.length) return;
+    if (isShuffle && playableQueue.length > 1) {
+      playSong(playableQueue[Math.floor(Math.random() * playableQueue.length)]);
       return;
     }
-    const nextIndex = (currentIndex + 1) % queue.length;
+    const nextIndex = (currentIndex + 1) % playableQueue.length;
     if (repeatMode === "off" && nextIndex === 0 && currentIndex !== -1) {
       liveAudio.pauseNormal();
       setIsPlaying(false);
       return;
     }
-    playSong(queue[nextIndex]);
-  }, [queue, currentIndex, isShuffle, repeatMode, playSong]);
+    playSong(playableQueue[nextIndex]);
+  }, [playableQueue, currentIndex, isShuffle, repeatMode, playSong]);
 
   const handlePrev = useCallback(() => {
-    if (!queue.length) return;
+    if (!playableQueue.length) return;
     if (liveAudio.normalCurrentTime > 3) {
       liveAudio.seekNormal(0);
       return;
     }
-    playSong(queue[currentIndex === 0 ? queue.length - 1 : currentIndex - 1]);
-  }, [queue, currentIndex, playSong]);
+    const prevIndex = currentIndex <= 0
+      ? playableQueue.length - 1
+      : currentIndex - 1;
+    playSong(playableQueue[prevIndex]);
+  }, [playableQueue, currentIndex, playSong]);
 
   const seek = useCallback((e) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -342,6 +331,22 @@ export default function Dashboard() {
     liveAudio.seekNormal(t);
   }, []);
 
+  // Handle song ended for repeat one
+  useEffect(() => {
+    const unsub = liveAudio.subscribeNormal((event) => {
+      if (event === "ended") {
+        if (repeatMode === "one") {
+          liveAudio.seekNormal(0);
+          liveAudio.resumeNormal().catch(() => {});
+        } else {
+          handleNext();
+        }
+      }
+    });
+    return unsub;
+  }, [repeatMode, handleNext]);
+
+  // ── Playlist helpers ───────────────────────────────────
   const openAddToPlaylist = async (song) => {
     setSelectedSong(song);
     await refreshPlaylists();
@@ -362,6 +367,7 @@ export default function Dashboard() {
     setShowShareModal(true);
   };
 
+  // ── Artist color helper ────────────────────────────────
   const artistColor = (name) => {
     const colors = [
       "from-indigo-500/20 to-purple-500/20 text-indigo-300 border-indigo-500/30",
@@ -434,8 +440,6 @@ export default function Dashboard() {
             setView("list");
           }}
           onSelectLiked={() => { setMode("liked"); setSelectedPlaylist(null); setView("list"); }}
-          likedSongs={songs.filter((s) => likedSongIds.includes(s._id))}
-          onToggleLike={toggleLike}
           onPlaylistsChanged={refreshPlaylists}
         />
 
@@ -453,22 +457,20 @@ export default function Dashboard() {
                 <div className="flex flex-col lg:flex-row lg:items-center gap-4">
                   <div className="flex items-center gap-3">
                     <div className="flex items-center gap-1 bg-white/5 rounded-xl p-1 border border-white/10">
-                      <button className="px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow">
+                      <button
+                        className="px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow">
                         <Music2 className="w-4 h-4 inline mr-1.5" />Songs
                       </button>
                       <button
                         onClick={() => setView("artists")}
-                        className="px-4 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-all"
-                      >
+                        className="px-4 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-all">
                         <Mic2 className="w-4 h-4 inline mr-1.5" />Artists
                       </button>
                     </div>
                     <h1 className="text-2xl font-bold">
                       {mode === "playlist"
                         ? selectedPlaylist?.name || "Playlist"
-                        : mode === "liked"
-                        ? "Liked Songs"
-                        : "Browse Music"}
+                        : mode === "liked" ? "Liked Songs" : "Browse Music"}
                     </h1>
                   </div>
 
@@ -487,15 +489,13 @@ export default function Dashboard() {
                       <button
                         onClick={() => setViewMode("list")}
                         className={`p-2 rounded-lg transition-all ${viewMode === "list" ? "bg-white/10 text-white" : "text-gray-500 hover:text-white"}`}
-                        title="List view"
-                      >
+                        title="List view">
                         <LayoutList className="w-4 h-4" />
                       </button>
                       <button
                         onClick={() => setViewMode("grid")}
                         className={`p-2 rounded-lg transition-all ${viewMode === "grid" ? "bg-white/10 text-white" : "text-gray-500 hover:text-white"}`}
-                        title="Grid view"
-                      >
+                        title="Grid view">
                         <LayoutGrid className="w-4 h-4" />
                       </button>
                     </div>
@@ -517,9 +517,9 @@ export default function Dashboard() {
                   )}
                 </div>
 
-                {/* Genre pills */}
+                {/* Genre pills — dynamic from API */}
                 <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                  {genres.map((g) => (
+                  {availableGenres.map((g) => (
                     <button
                       key={g}
                       onClick={() => setActiveGenre(g)}
@@ -574,11 +574,9 @@ export default function Dashboard() {
                               {playing ? (
                                 <div className="flex items-center gap-0.5">
                                   {[3, 4, 2].map((h, i) => (
-                                    <div
-                                      key={i}
+                                    <div key={i}
                                       className="w-1 bg-indigo-400 rounded-full animate-pulse"
-                                      style={{ height: `${h * 4}px`, animationDelay: `${i * 0.1}s` }}
-                                    />
+                                      style={{ height: `${h * 4}px`, animationDelay: `${i * 0.1}s` }} />
                                   ))}
                                 </div>
                               ) : (
@@ -614,20 +612,17 @@ export default function Dashboard() {
                               <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                                 <button
                                   onClick={(e) => { e.stopPropagation(); toggleLike(song._id); }}
-                                  className="p-1 rounded hover:bg-white/10"
-                                >
+                                  className="p-1 rounded hover:bg-white/10">
                                   <Heart className={`w-3.5 h-3.5 ${likedSongIds.includes(song._id) ? "text-red-400 fill-red-400" : "text-gray-400"}`} />
                                 </button>
                                 <button
                                   onClick={(e) => { e.stopPropagation(); openAddToPlaylist(song); }}
-                                  className="p-1 rounded hover:bg-white/10"
-                                >
+                                  className="p-1 rounded hover:bg-white/10">
                                   <Plus className="w-3.5 h-3.5 text-gray-400" />
                                 </button>
                                 <button
                                   onClick={(e) => { e.stopPropagation(); openShareModal(song); }}
-                                  className="p-1 rounded hover:bg-white/10"
-                                >
+                                  className="p-1 rounded hover:bg-white/10">
                                   <Share2 className="w-3.5 h-3.5 text-gray-400" />
                                 </button>
                               </div>
@@ -662,11 +657,9 @@ export default function Dashboard() {
                               {playing ? (
                                 <div className="flex items-end gap-0.5 h-6">
                                   {[3, 5, 4].map((h, i) => (
-                                    <div
-                                      key={i}
+                                    <div key={i}
                                       className="w-1 bg-white rounded-full animate-pulse"
-                                      style={{ height: `${h * 4}px`, animationDelay: `${i * 0.1}s` }}
-                                    />
+                                      style={{ height: `${h * 4}px`, animationDelay: `${i * 0.1}s` }} />
                                   ))}
                                 </div>
                               ) : (
@@ -677,8 +670,7 @@ export default function Dashboard() {
                             </div>
                             {playing && (
                               <div className="absolute top-2 left-2 flex items-center gap-1 px-2 py-0.5 bg-indigo-500 rounded-full text-xs text-white font-semibold">
-                                <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                                NOW
+                                <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />NOW
                               </div>
                             )}
                             <div className="absolute bottom-2 right-2 px-1.5 py-0.5 bg-black/60 rounded text-xs text-white/80">
@@ -697,20 +689,17 @@ export default function Dashboard() {
                               <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                 <button
                                   onClick={(e) => { e.stopPropagation(); toggleLike(song._id); }}
-                                  className="p-1 rounded hover:bg-white/10"
-                                >
+                                  className="p-1 rounded hover:bg-white/10">
                                   <Heart className={`w-3.5 h-3.5 ${likedSongIds.includes(song._id) ? "text-red-400 fill-red-400" : "text-gray-400"}`} />
                                 </button>
                                 <button
                                   onClick={(e) => { e.stopPropagation(); openAddToPlaylist(song); }}
-                                  className="p-1 rounded hover:bg-white/10"
-                                >
+                                  className="p-1 rounded hover:bg-white/10">
                                   <Plus className="w-3.5 h-3.5 text-gray-400" />
                                 </button>
                                 <button
                                   onClick={(e) => { e.stopPropagation(); openShareModal(song); }}
-                                  className="p-1 rounded hover:bg-white/10"
-                                >
+                                  className="p-1 rounded hover:bg-white/10">
                                   <Share2 className="w-3.5 h-3.5 text-gray-400" />
                                 </button>
                               </div>
@@ -734,8 +723,7 @@ export default function Dashboard() {
                 <div className="flex items-center gap-4">
                   <button
                     onClick={() => setView("list")}
-                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-sm text-gray-400 hover:text-white transition-colors border border-white/10"
-                  >
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-sm text-gray-400 hover:text-white transition-colors border border-white/10">
                     <ArrowLeft className="w-4 h-4" />Back
                   </button>
                   <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -772,10 +760,8 @@ export default function Dashboard() {
                             )}
                             <div className="flex flex-wrap gap-1 justify-center mt-2">
                               {[...artist.genres].slice(0, 2).map((g) => (
-                                <span
-                                  key={g}
-                                  className="text-xs px-1.5 py-0.5 bg-white/5 rounded border border-white/10 text-gray-400"
-                                >
+                                <span key={g}
+                                  className="text-xs px-1.5 py-0.5 bg-white/5 rounded border border-white/10 text-gray-400">
                                   {g}
                                 </span>
                               ))}
@@ -798,8 +784,7 @@ export default function Dashboard() {
               <div className="max-w-7xl mx-auto">
                 <button
                   onClick={() => setView("list")}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-sm text-gray-400 hover:text-white transition-colors border border-white/10 mb-6"
-                >
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-sm text-gray-400 hover:text-white transition-colors border border-white/10 mb-6">
                   <ArrowLeft className="w-4 h-4" />Back to songs
                 </button>
 
@@ -813,12 +798,9 @@ export default function Dashboard() {
                         <ListMusic className="w-4 h-4 text-gray-500" />
                       </div>
                       <div className="space-y-1 max-h-64 overflow-y-auto">
-                        {queue.slice(currentIndex + 1).slice(0, 5).map((song) => (
-                          <button
-                            key={song._id}
-                            onClick={() => playSong(song)}
-                            className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-colors text-left"
-                          >
+                        {playableQueue.slice(currentIndex + 1).slice(0, 5).map((song) => (
+                          <button key={song._id} onClick={() => playSong(song)}
+                            className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-colors text-left">
                             <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500/20 to-purple-500/20 flex items-center justify-center flex-shrink-0">
                               <Music2 className="w-4 h-4 text-indigo-400" />
                             </div>
@@ -833,6 +815,9 @@ export default function Dashboard() {
                             </span>
                           </button>
                         ))}
+                        {playableQueue.slice(currentIndex + 1).length === 0 && (
+                          <p className="text-xs text-gray-600 text-center py-4">No songs up next</p>
+                        )}
                       </div>
                     </div>
 
@@ -842,11 +827,8 @@ export default function Dashboard() {
                         {recentlyPlayed.length === 0 ? (
                           <p className="text-xs text-gray-500">No recent songs yet.</p>
                         ) : recentlyPlayed.slice(0, 5).map((song) => (
-                          <button
-                            key={song._id}
-                            onClick={() => playSong(song)}
-                            className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-colors text-left"
-                          >
+                          <button key={song._id} onClick={() => playSong(song)}
+                            className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-colors text-left">
                             <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-purple-500/20 to-pink-500/20 flex items-center justify-center flex-shrink-0">
                               <Music2 className="w-4 h-4 text-purple-400" />
                             </div>
@@ -867,6 +849,7 @@ export default function Dashboard() {
 
                   {/* CENTER — Player */}
                   <div className="bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 p-8">
+                    {/* Status badge */}
                     <div className="flex items-center justify-center mb-5">
                       {isPlaying ? (
                         <div className="flex items-center gap-2 px-4 py-1.5 bg-indigo-500/10 rounded-full border border-indigo-500/30">
@@ -889,11 +872,9 @@ export default function Dashboard() {
                       {isPlaying && (
                         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-end gap-1">
                           {[3, 5, 8, 6, 4, 7, 5, 3].map((h, i) => (
-                            <div
-                              key={i}
+                            <div key={i}
                               className="w-1.5 bg-white/50 rounded-full animate-pulse"
-                              style={{ height: `${h * 3}px`, animationDelay: `${i * 0.08}s` }}
-                            />
+                              style={{ height: `${h * 3}px`, animationDelay: `${i * 0.08}s` }} />
                           ))}
                         </div>
                       )}
@@ -921,20 +902,17 @@ export default function Dashboard() {
                       </div>
                     </div>
 
-                    {/* Progress */}
+                    {/* Progress bar */}
                     <div className="mb-2">
                       <div
                         className="w-full h-1.5 bg-white/10 rounded-full cursor-pointer relative group"
-                        onClick={seek}
-                      >
+                        onClick={seek}>
                         <div
                           className="absolute left-0 top-0 h-1.5 bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all"
-                          style={{ width: `${progress}%` }}
-                        />
+                          style={{ width: `${progress}%` }} />
                         <div
                           className="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 bg-white rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
-                          style={{ left: `${progress}%`, marginLeft: "-7px" }}
-                        />
+                          style={{ left: `${progress}%`, marginLeft: "-7px" }} />
                       </div>
                     </div>
                     <div className="flex items-center justify-between text-xs text-gray-500 mb-6">
@@ -950,28 +928,22 @@ export default function Dashboard() {
                           isShuffle
                             ? "bg-indigo-500/20 text-indigo-400"
                             : "bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"
-                        }`}
-                      >
+                        }`}>
                         <Shuffle className="w-4 h-4" />
                       </button>
-                      <button
-                        onClick={handlePrev}
-                        className="w-11 h-11 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-white transition-all"
-                      >
+                      <button onClick={handlePrev}
+                        className="w-11 h-11 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-white transition-all">
                         <SkipBack className="w-5 h-5" />
                       </button>
                       <button
                         onClick={togglePlay}
-                        className="w-14 h-14 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-xl shadow-indigo-500/40 hover:shadow-indigo-500/60 transition-all hover:scale-105 flex items-center justify-center"
-                      >
+                        className="w-14 h-14 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-xl shadow-indigo-500/40 hover:shadow-indigo-500/60 transition-all hover:scale-105 flex items-center justify-center">
                         {isPlaying
                           ? <Pause className="w-6 h-6" />
                           : <Play  className="w-6 h-6 ml-0.5" />}
                       </button>
-                      <button
-                        onClick={handleNext}
-                        className="w-11 h-11 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-white transition-all"
-                      >
+                      <button onClick={handleNext}
+                        className="w-11 h-11 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-white transition-all">
                         <SkipForward className="w-5 h-5" />
                       </button>
                       <button
@@ -984,14 +956,12 @@ export default function Dashboard() {
                           repeatMode !== "off"
                             ? "bg-indigo-500/20 text-indigo-400"
                             : "bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white"
-                        }`}
-                      >
+                        }`}>
                         <Repeat className="w-4 h-4" />
                         {repeatMode === "one" && (
                           <span
                             className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-indigo-500 rounded-full flex items-center justify-center text-white font-bold"
-                            style={{ fontSize: "8px" }}
-                          >
+                            style={{ fontSize: "8px" }}>
                             1
                           </span>
                         )}
@@ -1002,14 +972,9 @@ export default function Dashboard() {
                     <div className="flex items-center gap-3 mb-5">
                       <Volume2 className="w-4 h-4 text-gray-400" />
                       <input
-                        type="range"
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        value={volume}
+                        type="range" min={0} max={1} step={0.01} value={volume}
                         onChange={(e) => setVolume(Number(e.target.value))}
-                        className="flex-1 accent-indigo-500"
-                      />
+                        className="flex-1 accent-indigo-500" />
                       <span className="text-xs text-gray-400 w-9 text-right">
                         {Math.round(volume * 100)}%
                       </span>
@@ -1028,18 +993,15 @@ export default function Dashboard() {
                               </p>
                             </div>
                           </div>
-                          <button
-                            onClick={cancelTimer}
-                            className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors"
-                          >
+                          <button onClick={cancelTimer}
+                            className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors">
                             <X className="w-4 h-4" />
                           </button>
                         </div>
                       ) : (
                         <button
                           onClick={() => setShowTimerModal(true)}
-                          className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-sm"
-                        >
+                          className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-sm">
                           <Clock className="w-4 h-4 text-gray-400" />
                           <span className="text-gray-400">Set Sleep Timer</span>
                         </button>
@@ -1055,13 +1017,11 @@ export default function Dashboard() {
                         {[
                           {
                             icon: (
-                              <Heart
-                                className={`w-5 h-5 ${
-                                  likedSongIds.includes(currentSong?._id)
-                                    ? "text-red-400 fill-red-400"
-                                    : "text-gray-400"
-                                }`}
-                              />
+                              <Heart className={`w-5 h-5 ${
+                                likedSongIds.includes(currentSong?._id)
+                                  ? "text-red-400 fill-red-400"
+                                  : "text-gray-400"
+                              }`} />
                             ),
                             label: "Like",
                             action: () => currentSong?._id && toggleLike(currentSong._id),
@@ -1077,11 +1037,8 @@ export default function Dashboard() {
                             action: () => openShareModal(currentSong),
                           },
                         ].map(({ icon, label, action }) => (
-                          <button
-                            key={label}
-                            onClick={action}
-                            className="flex flex-col items-center gap-2 p-3 rounded-xl bg-white/5 hover:bg-white/10 transition-all border border-white/10"
-                          >
+                          <button key={label} onClick={action}
+                            className="flex flex-col items-center gap-2 p-3 rounded-xl bg-white/5 hover:bg-white/10 transition-all border border-white/10">
                             {icon}
                             <span className="text-xs text-gray-400">{label}</span>
                           </button>
@@ -1094,17 +1051,14 @@ export default function Dashboard() {
                         <h3 className="font-semibold text-white text-sm mb-3">Artist</h3>
                         <div
                           onClick={() => { setSearchQuery(currentSong.artist); setView("list"); }}
-                          className="flex items-center gap-3 cursor-pointer hover:bg-white/5 rounded-xl p-2 -m-2 transition-colors"
-                        >
-                          <div
-                            className={`w-12 h-12 rounded-full bg-gradient-to-br ${artistColor(currentSong.artist)} flex items-center justify-center text-xl font-bold border`}
-                          >
+                          className="flex items-center gap-3 cursor-pointer hover:bg-white/5 rounded-xl p-2 -m-2 transition-colors">
+                          <div className={`w-12 h-12 rounded-full bg-gradient-to-br ${artistColor(currentSong.artist)} flex items-center justify-center text-xl font-bold border`}>
                             {currentSong.artist[0]?.toUpperCase()}
                           </div>
                           <div className="flex-1 min-w-0">
                             <p className="font-semibold text-white text-sm">{currentSong.artist}</p>
                             <p className="text-xs text-gray-400">
-                              {songs.filter((s) => s.artist === currentSong.artist).length} songs
+                              {songs.filter((s) => s.artist === currentSong.artist && !s.isLiveOnly).length} songs
                             </p>
                           </div>
                           <ChevronRight className="w-4 h-4 text-gray-500" />
@@ -1134,8 +1088,7 @@ export default function Dashboard() {
                     {liveStreamActive && (
                       <Link
                         to="/live"
-                        className="block bg-red-500/10 backdrop-blur-xl rounded-2xl border border-red-500/20 p-5 hover:bg-red-500/20 transition-all group"
-                      >
+                        className="block bg-red-500/10 backdrop-blur-xl rounded-2xl border border-red-500/20 p-5 hover:bg-red-500/20 transition-all group">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform">
                             <Radio className="w-5 h-5 text-red-400" />
@@ -1168,16 +1121,13 @@ export default function Dashboard() {
               {/* Seek bar */}
               <div
                 className="w-full h-1 bg-white/10 cursor-pointer group relative"
-                onClick={seek}
-              >
+                onClick={seek}>
                 <div
                   className="h-1 bg-gradient-to-r from-indigo-500 to-purple-500 transition-all"
-                  style={{ width: `${progress}%` }}
-                />
+                  style={{ width: `${progress}%` }} />
                 <div
                   className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 transition-opacity"
-                  style={{ left: `${progress}%`, marginLeft: "-6px" }}
-                />
+                  style={{ left: `${progress}%`, marginLeft: "-6px" }} />
               </div>
 
               <div className="flex items-center gap-3 px-4 sm:px-6 py-3">
@@ -1187,11 +1137,9 @@ export default function Dashboard() {
                   {isPlaying ? (
                     <div className="flex items-end gap-0.5">
                       {[2, 3, 2].map((h, i) => (
-                        <div
-                          key={i}
+                        <div key={i}
                           className="w-1 bg-indigo-400 rounded-full animate-pulse"
-                          style={{ height: `${h * 4}px`, animationDelay: `${i * 0.1}s` }}
-                        />
+                          style={{ height: `${h * 4}px`, animationDelay: `${i * 0.1}s` }} />
                       ))}
                     </div>
                   ) : (
@@ -1205,9 +1153,9 @@ export default function Dashboard() {
                     {currentSong.name}
                   </p>
                   <p className="text-xs text-gray-400 truncate">{currentSong.artist}</p>
-                  {/* Show hint when live stream is running in background */}
+                  {/* Live stream hint */}
                   {liveStreamActive && liveAudio.liveActive && (
-                    <p className="text-xs text-red-400/70 truncate flex items-center gap-1 mt-0.5">
+                    <p className="text-xs text-red-400/70 flex items-center gap-1 mt-0.5">
                       <span className="w-1.5 h-1.5 rounded-full bg-red-400 inline-block flex-shrink-0" />
                       Live stream paused locally
                     </p>
@@ -1216,43 +1164,35 @@ export default function Dashboard() {
 
                 {/* Time */}
                 <div className="hidden sm:flex flex-col items-end text-xs flex-shrink-0 min-w-[68px] text-right">
-                  <span className="text-white font-medium tabular-nums">
-                    {formatMMSS(currentTime)}
-                  </span>
+                  <span className="text-white font-medium tabular-nums">{formatMMSS(currentTime)}</span>
                   <span className="text-gray-500 tabular-nums">{formatMMSS(duration)}</span>
                 </div>
 
                 {/* Controls */}
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <button
-                    onClick={handlePrev}
-                    className="w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center text-white transition-all"
-                  >
+                  <button onClick={handlePrev}
+                    className="w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center text-white transition-all">
                     <SkipBack className="w-4 h-4" />
                   </button>
                   <button
                     onClick={togglePlay}
-                    className="w-11 h-11 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-lg shadow-indigo-500/40 flex items-center justify-center transition-all hover:scale-105 active:scale-95"
-                  >
+                    className="w-11 h-11 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-lg shadow-indigo-500/40 flex items-center justify-center transition-all hover:scale-105 active:scale-95">
                     {isPlaying
                       ? <Pause className="w-5 h-5" />
                       : <Play  className="w-5 h-5 ml-0.5" />}
                   </button>
-                  <button
-                    onClick={handleNext}
-                    className="w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center text-white transition-all"
-                  >
+                  <button onClick={handleNext}
+                    className="w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center text-white transition-all">
                     <SkipForward className="w-4 h-4" />
                   </button>
                 </div>
 
-                {/* Return to live button */}
+                {/* Return to live */}
                 {liveStreamActive && (
                   <Link
                     to="/live"
                     className="w-9 h-9 rounded-full bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 flex items-center justify-center text-red-400 transition-all flex-shrink-0"
-                    title="Return to live stream"
-                  >
+                    title="Return to live stream">
                     <Radio className="w-4 h-4" />
                   </Link>
                 )}
@@ -1261,8 +1201,7 @@ export default function Dashboard() {
                 <button
                   onClick={() => setView("player")}
                   className="w-9 h-9 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center text-gray-400 hover:text-white transition-all flex-shrink-0"
-                  title="Open full player"
-                >
+                  title="Open full player">
                   <ChevronUp className="w-4 h-4" />
                 </button>
               </div>
@@ -1275,10 +1214,8 @@ export default function Dashboard() {
               <div className="bg-[#0d1120] rounded-2xl p-6 w-full max-w-md border border-white/10">
                 <div className="flex items-center justify-between mb-5">
                   <h2 className="text-xl font-bold text-white">Add to playlist</h2>
-                  <button
-                    onClick={() => setShowPlaylistModal(false)}
-                    className="p-2 hover:bg-white/10 rounded-xl transition-colors"
-                  >
+                  <button onClick={() => setShowPlaylistModal(false)}
+                    className="p-2 hover:bg-white/10 rounded-xl transition-colors">
                     <X className="w-5 h-5 text-gray-400" />
                   </button>
                 </div>
@@ -1287,26 +1224,21 @@ export default function Dashboard() {
                     <p className="text-center text-gray-500 py-8">
                       No playlists yet. Create one from the sidebar.
                     </p>
-                  ) : (
-                    playlists.map((p) => (
-                      <button
-                        key={p.id}
-                        onClick={() => addSongToPlaylist(p.id)}
-                        className="flex items-center gap-3 w-full p-4 bg-white/5 hover:bg-white/10 rounded-xl transition-all border border-white/10 hover:border-indigo-500/50"
-                      >
-                        <div className="w-10 h-10 bg-gradient-to-br from-purple-500/20 to-pink-500/20 rounded-lg flex items-center justify-center border border-purple-500/30">
-                          <span className="text-sm font-bold text-purple-300">
-                            {p.name?.[0]?.toUpperCase()}
-                          </span>
-                        </div>
-                        <div className="flex-1 text-left">
-                          <p className="font-medium text-white text-sm">{p.name}</p>
-                          <p className="text-xs text-gray-400">{p.songs?.length || 0} songs</p>
-                        </div>
-                        <ChevronRight className="w-4 h-4 text-gray-500" />
-                      </button>
-                    ))
-                  )}
+                  ) : playlists.map((p) => (
+                    <button key={p.id} onClick={() => addSongToPlaylist(p.id)}
+                      className="flex items-center gap-3 w-full p-4 bg-white/5 hover:bg-white/10 rounded-xl transition-all border border-white/10 hover:border-indigo-500/50">
+                      <div className="w-10 h-10 bg-gradient-to-br from-purple-500/20 to-pink-500/20 rounded-lg flex items-center justify-center border border-purple-500/30">
+                        <span className="text-sm font-bold text-purple-300">
+                          {p.name?.[0]?.toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="flex-1 text-left">
+                        <p className="font-medium text-white text-sm">{p.name}</p>
+                        <p className="text-xs text-gray-400">{p.songs?.length || 0} songs</p>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-gray-500" />
+                    </button>
+                  ))}
                 </div>
               </div>
             </div>
@@ -1317,21 +1249,16 @@ export default function Dashboard() {
               <div className="bg-[#0d1120] rounded-2xl p-6 w-full max-w-xs border border-white/10">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-xl font-bold text-white">Sleep Timer</h2>
-                  <button
-                    onClick={() => setShowTimerModal(false)}
-                    className="p-2 hover:bg-white/10 rounded-xl transition-colors"
-                  >
+                  <button onClick={() => setShowTimerModal(false)}
+                    className="p-2 hover:bg-white/10 rounded-xl transition-colors">
                     <X className="w-5 h-5 text-gray-400" />
                   </button>
                 </div>
                 <p className="text-xs text-gray-500 mb-4">Stop playback after</p>
                 <div className="space-y-2">
                   {[5, 10, 15, 30, 45, 60].map((m) => (
-                    <button
-                      key={m}
-                      onClick={() => startTimerMinutes(m)}
-                      className="w-full px-4 py-3 bg-white/5 hover:bg-white/10 rounded-xl transition-all border border-white/10 hover:border-indigo-500/50 text-white text-sm font-medium"
-                    >
+                    <button key={m} onClick={() => startTimerMinutes(m)}
+                      className="w-full px-4 py-3 bg-white/5 hover:bg-white/10 rounded-xl transition-all border border-white/10 hover:border-indigo-500/50 text-white text-sm font-medium">
                       {m} minutes
                     </button>
                   ))}

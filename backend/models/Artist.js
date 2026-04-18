@@ -5,6 +5,7 @@ const artistSchema = new mongoose.Schema(
     name:      { type: String, required: true, trim: true },
     bio:       { type: String, default: "" },
     genre:     { type: String, default: "" },
+    photo:     { type: String, default: "" }, // filename stored in uploads/artists/
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true }

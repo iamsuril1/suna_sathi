@@ -1,50 +1,41 @@
 const express = require("express");
-const authMiddleware = require("../middleware/authMiddleware");
-const adminMiddleware = require("../middleware/adminMiddleware");
-const { body } = require('express-validator');
+const auth    = require("../middleware/authMiddleware");
+const admin   = require("../middleware/adminMiddleware");
+const { body, validationResult } = require("express-validator");
 const {
   submitContact,
   getAllContacts,
   updateContactStatus,
   deleteContact,
-  getContactStats
+  getContactStats,
 } = require("../controllers/contactController");
 
 const router = express.Router();
 
-// Validation middleware
+const validate = (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ message: errors.array()[0].msg });
+  next();
+};
+
 const validateContact = [
-  body('name')
-    .trim()
-    .notEmpty()
-    .withMessage('Name is required')
-    .isLength({ min: 2, max: 100 })
-    .withMessage('Name must be between 2 and 100 characters'),
-  body('email')
-    .isEmail()
-    .withMessage('Valid email is required')
-    .normalizeEmail(),
-  body('subject')
-    .trim()
-    .notEmpty()
-    .withMessage('Subject is required')
-    .isLength({ min: 5, max: 200 })
-    .withMessage('Subject must be between 5 and 200 characters'),
-  body('message')
-    .trim()
-    .notEmpty()
-    .withMessage('Message is required')
-    .isLength({ min: 10, max: 2000 })
-    .withMessage('Message must be between 10 and 2000 characters'),
+  body("name").trim().notEmpty().withMessage("Name is required")
+    .isLength({ min: 2, max: 100 }).withMessage("Name must be 2–100 characters"),
+  body("email").isEmail().withMessage("Valid email is required").normalizeEmail(),
+  body("subject").trim().notEmpty().withMessage("Subject is required")
+    .isLength({ min: 5, max: 200 }).withMessage("Subject must be 5–200 characters"),
+  body("message").trim().notEmpty().withMessage("Message is required")
+    .isLength({ min: 10, max: 2000 }).withMessage("Message must be 10–2000 characters"),
+  validate,
 ];
 
-// Public route - anyone can submit contact form
+// Public
 router.post("/", validateContact, submitContact);
 
-// Admin routes - require authentication and admin role
-router.get("/", authMiddleware, adminMiddleware, getAllContacts);
-router.get("/stats", authMiddleware, adminMiddleware, getContactStats);
-router.put("/:id/status", authMiddleware, adminMiddleware, updateContactStatus);
-router.delete("/:id", authMiddleware, adminMiddleware, deleteContact);
+// Admin
+router.get  ("/",          auth, admin, getAllContacts);
+router.get  ("/stats",     auth, admin, getContactStats);
+router.put  ("/:id/status", auth, admin, updateContactStatus);
+router.delete("/:id",      auth, admin, deleteContact);
 
 module.exports = router;

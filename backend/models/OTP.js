@@ -1,26 +1,24 @@
-// backend/models/OTP.js
-
 const mongoose = require("mongoose");
 
 const otpSchema = new mongoose.Schema(
   {
     email: {
-      type: String,
-      required: true,
+      type:      String,
+      required:  true,
       lowercase: true,
-      trim: true,
+      trim:      true,
     },
     otp: {
-      type: String,
+      type:     String,
       required: true,
     },
     expiresAt: {
-      type: Date,
+      type:     Date,
       required: true,
-      index: { expires: 0 }, // MongoDB TTL: auto-deletes document when expiresAt passes
+      index:    { expires: 0 },
     },
     attempts: {
-      type: Number,
+      type:    Number,
       default: 0,
     },
   },

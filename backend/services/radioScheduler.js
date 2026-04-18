@@ -1,34 +1,17 @@
-/**
- * RadioScheduler
- *
- * Treats the playlist as a continuous infinite radio broadcast
- * that started at a fixed wall-clock time.
- *
- * STREAM_START = 10 Apr 2026, 11:00:00 AM NPT (UTC+5:45)
- *             = 10 Apr 2026, 05:15:00 AM UTC
- *
- * At any moment we can calculate:
- *   elapsed  = now - STREAM_START          (seconds since broadcast began)
- *   position = elapsed % totalPlaylistDuration
- *
- * From `position` we find which song is playing and at what offset.
- */
-
 const Song = require("../models/Song");
 
-// 10 Apr 2026 11:00:00 AM NPT = 10 Apr 2026 05:15:00 UTC
-const STREAM_START_UTC = new Date("2026-04-10T05:15:00.000Z");
+const STREAM_START_UTC  = new Date("2026-04-10T05:15:00.000Z");
+const DEFAULT_DURATION  = 180; // 3 minutes fallback if ffprobe not available
 
 class RadioScheduler {
   constructor() {
-    this._songs         = [];   // ordered Song documents
-    this._durations     = [];   // duration in seconds per song (from DB or fallback)
-    this._totalDuration = 0;    // sum of all song durations
+    this._songs         = [];
+    this._durations     = [];
+    this._totalDuration = 0;
     this._loaded        = false;
     this._loadPromise   = null;
   }
 
-  // ── Load songs + durations ─────────────────────────────
   async load() {
     if (this._loadPromise) return this._loadPromise;
     this._loadPromise = this._doLoad();
@@ -36,51 +19,45 @@ class RadioScheduler {
   }
 
   async _doLoad() {
-    // Fetch all non-live-only songs in creation order
-    const songs = await Song.find({ isLiveOnly: { $ne: true } })
-      .sort({ createdAt: 1 })
-      .lean();
+    try {
+      const songs = await Song.find({ isLiveOnly: { $ne: true } })
+        .sort({ createdAt: 1 })
+        .lean();
 
-    if (!songs.length) {
-      this._songs         = [];
-      this._durations     = [];
-      this._totalDuration = 0;
-      this._loaded        = true;
-      return;
+      if (!songs.length) {
+        this._songs         = [];
+        this._durations     = [];
+        this._totalDuration = 0;
+        this._loaded        = true;
+        console.warn("⚠️  RadioScheduler: no songs found");
+        return;
+      }
+
+      this._songs     = songs;
+      this._durations = songs.map((s) => {
+        const d = Number(s.duration);
+        return (d && d > 0) ? d : DEFAULT_DURATION;
+      });
+      this._totalDuration = this._durations.reduce((a, b) => a + b, 0);
+      this._loaded    = true;
+
+      console.log(
+        `✅ RadioScheduler: ${songs.length} songs, ` +
+        `total ${(this._totalDuration / 60).toFixed(1)} min`
+      );
+    } catch (err) {
+      console.error("RadioScheduler load error:", err);
+      this._loadPromise = null; // allow retry
+      throw err;
     }
-
-    // Use stored duration if available, fallback to 3 minutes
-    const DEFAULT_DURATION = 180; // 3 min fallback
-
-    this._songs     = songs;
-    this._durations = songs.map((s) => s.duration || DEFAULT_DURATION);
-    this._totalDuration = this._durations.reduce((a, b) => a + b, 0);
-    this._loaded    = true;
-
-    console.log(
-      `RadioScheduler loaded ${songs.length} songs, ` +
-      `total duration ${(this._totalDuration / 60).toFixed(1)} min`
-    );
   }
 
-  // Force reload (e.g. after new song uploaded)
   async reload() {
     this._loaded      = false;
     this._loadPromise = null;
     await this.load();
   }
 
-  // ── Core calculation ───────────────────────────────────
-
-  /**
-   * Returns what should be playing RIGHT NOW.
-   * @returns {{
-   *   song: Object,
-   *   songIndex: number,
-   *   positionInSong: number,   // seconds into current song
-   *   totalElapsed: number,     // seconds since broadcast start
-   * } | null}
-   */
   getCurrentState() {
     if (!this._loaded || !this._songs.length || this._totalDuration === 0) {
       return null;
@@ -90,10 +67,9 @@ class RadioScheduler {
     const startMs    = STREAM_START_UTC.getTime();
     const elapsedSec = Math.max(0, (nowMs - startMs) / 1000);
 
-    // Wrap elapsed into the playlist loop
+    // Wrap into playlist loop
     const loopPosition = elapsedSec % this._totalDuration;
 
-    // Walk through songs to find which one is playing
     let accumulated = 0;
     for (let i = 0; i < this._songs.length; i++) {
       const songDur = this._durations[i];
@@ -108,7 +84,7 @@ class RadioScheduler {
       accumulated += songDur;
     }
 
-    // Edge case: floating point landed exactly on boundary → first song
+    // Floating point edge case
     return {
       song:           this._songs[0],
       songIndex:      0,
@@ -117,9 +93,6 @@ class RadioScheduler {
     };
   }
 
-  /**
-   * How many seconds until the current song ends?
-   */
   secondsUntilNextSong() {
     const state = this.getCurrentState();
     if (!state) return null;
@@ -134,6 +107,5 @@ class RadioScheduler {
   get streamStart()   { return STREAM_START_UTC; }
 }
 
-// Single instance shared across app
 const radioScheduler = new RadioScheduler();
 module.exports = radioScheduler;

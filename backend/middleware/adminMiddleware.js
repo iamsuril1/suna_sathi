@@ -9,17 +9,16 @@ module.exports = async (req, res, next) => {
     }
 
     if (user.role !== "admin") {
-      return res.status(403).json({ message: "Admin access denied" });
+      return res.status(403).json({ message: "Admin access required" });
     }
 
-    // SECURITY FIX: Check if admin is blocked
     if (user.blocked) {
       return res.status(403).json({ message: "Your account has been blocked" });
     }
 
     next();
   } catch (error) {
-    console.error('Admin middleware error:', error);
+    console.error("Admin middleware error:", error);
     res.status(500).json({ message: "Server error" });
   }
 };

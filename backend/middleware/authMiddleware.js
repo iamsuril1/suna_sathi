@@ -1,10 +1,8 @@
 const jwt = require("jsonwebtoken");
 
-// Validate JWT secret exists
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
-  console.error('CRITICAL ERROR: JWT_SECRET is not defined in environment variables!');
-  console.error('The application cannot run securely without a JWT secret.');
+  console.error("CRITICAL ERROR: JWT_SECRET is not defined!");
   process.exit(1);
 }
 
@@ -22,7 +20,7 @@ module.exports = (req, res, next) => {
     req.user = decoded;
     next();
   } catch (error) {
-    console.error('Token verification failed:', error.message);
-    res.status(401).json({ message: "Invalid token" });
+    console.error("Token verification failed:", error.message);
+    res.status(401).json({ message: "Invalid or expired token" });
   }
 };

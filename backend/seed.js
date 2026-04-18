@@ -1,22 +1,12 @@
 require("dotenv").config();
-const mongoose = require("mongoose");
-const bcrypt = require("bcryptjs");
+const mongoose  = require("mongoose");
+const bcrypt    = require("bcryptjs");
 const connectDB = require("./config/db");
-const User = require("./models/User");
+const User      = require("./models/User");
 
 const seeds = [
-  {
-    name: "Admin User",
-    email: "admin@sunasathi.com",
-    password: "admin123",
-    role: "admin",
-  },
-  {
-    name: "Test User",
-    email: "user@sunasathi.com",
-    password: "user123",
-    role: "user",
-  },
+  { name: "Admin User", email: "admin@sunasathi.com", password: "admin123", role: "admin" },
+  { name: "Test User",  email: "user@sunasathi.com",  password: "user123",  role: "user"  },
 ];
 
 const seed = async () => {
@@ -28,7 +18,14 @@ const seed = async () => {
       const exists = await User.findOne({ email: s.email });
 
       if (exists) {
-        console.log(` Skipped  → ${s.email} (already exists)`);
+        // Fix existing seed users — ensure isVerified is true
+        if (!exists.isVerified) {
+          exists.isVerified = true;
+          await exists.save();
+          console.log(` Fixed   → ${s.email} (set isVerified=true)`);
+        } else {
+          console.log(` Skipped → ${s.email} (already exists)`);
+        }
         continue;
       }
 
@@ -40,9 +37,10 @@ const seed = async () => {
         role:       s.role,
         blocked:    false,
         isVerified: true,
+        likedSongs: [],
       });
 
-      console.log(`✅ Created  → ${s.email}  |  role: ${s.role}  |  password: ${s.password}`);
+      console.log(`✅ Created → ${s.email} | role: ${s.role} | password: ${s.password}`);
     }
 
     console.log("\nSeeding complete.");
@@ -50,7 +48,6 @@ const seed = async () => {
     console.error("Seeding failed:", err.message);
   } finally {
     await mongoose.disconnect();
-    console.log("Disconnected from MongoDB");
     process.exit(0);
   }
 };

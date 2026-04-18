@@ -1,6 +1,3 @@
-// backend/routes/authRoutes.js
-// REPLACE your existing authRoutes.js with this
-
 const router         = require("express").Router();
 const authController = require("../controllers/authController");
 const authMiddleware = require("../middleware/authMiddleware");
@@ -11,15 +8,24 @@ const {
 } = require("../middleware/Validation");
 
 // Public
-router.post("/register",    validateRegister,       authController.register);
-router.post("/login",       validateLogin,          authController.login);
+router.post("/register",   validateRegister, authController.register);
+router.post("/login",      validateLogin,    authController.login);
 
 // OTP
-router.post("/verify-otp",  authController.verifyOTP);
-router.post("/resend-otp",  authController.resendOTP);
+router.post("/verify-otp", authController.verifyOTP);
+router.post("/resend-otp", authController.resendOTP);
 
-// Protected (must be logged in)
-router.get ("/me",          authMiddleware,         authController.getMe);
-router.put ("/me",          authMiddleware, validateUpdateProfile, authController.updateMe);
+// Password reset (public)
+router.post("/forgot-password",           authController.forgotPassword);
+router.post("/reset-password/:token",     authController.resetPassword);
+router.get ("/validate-reset/:token",     authController.validateResetToken);
+
+// Protected
+router.get ("/me",         authMiddleware, authController.getMe);
+router.put ("/me",         authMiddleware, validateUpdateProfile, authController.updateMe);
+
+// Liked songs (DB-backed, per user)
+router.get ("/liked-songs",         authMiddleware, authController.getLikedSongs);
+router.post("/liked-songs/toggle",  authMiddleware, authController.toggleLikedSong);
 
 module.exports = router;
